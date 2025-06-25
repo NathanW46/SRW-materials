@@ -3356,7 +3356,7 @@ class SRWLOptMir(SRWLOpt):
         :param _ang_fin: final grazing angle value for which the reflectivity coefficient is specified
         :param _ang_scale_type: angle sampling type ('lin' for linear, 'log' for logarithmic)      
         """
-
+    
         self.set_dim_sim_meth(_size_tang, _size_sag, _ap_shape, _sim_meth, _npt, _nps, _treat_in_out, _ext_in, _ext_out)
         self.set_orient(_nvx, _nvy, _nvz, _tvx, _tvy, _x, _y)
         self.set_reflect(_refl, _n_ph_en, _n_ang, _n_comp, _ph_en_start, _ph_en_fin, _ph_en_scale_type, _ang_start, _ang_fin, _ang_scale_type)
@@ -5604,13 +5604,15 @@ def srwl_opt_setup_Hartmann_sensor_dev(_per_x, _per_y, _hole_nx, _hole_ny, _hole
     return opTr
 
 #****************************************************************************
-def srwl_opt_setup_surf_height_1d(_height_prof_data, _dim, _ang, _ang_r=0, _amp_coef=1, _ar_arg_long=None, _nx=0, _ny=0, _size_x=0, _size_y=0, _xc=0, _yc=0): #OC19072018
+def srwl_opt_setup_surf_height_1d(_height_prof_data, _dim, _ang, _ang_r=0, _refl=1, _amp_coef=1, _ar_arg_long=None, _nx=0, _ny=0, _size_x=0, _size_y=0, _xc=0, _yc=0): #NW06062025
+# def srwl_opt_setup_surf_height_1d(_height_prof_data, _dim, _ang, _ang_r=0, _amp_coef=1, _ar_arg_long=None, _nx=0, _ny=0, _size_x=0, _size_y=0, _xc=0, _yc=0): #OC19072018
     """
     Setup Transmission type optical element with 1D (mirror or grating) surface Heght Profile data
     :param _height_prof_data: two- or one-column table containing, in case of two columns: longitudinal position in [m] (1st column) and the Height Profile in [m] (2nd column) data; in case of one column, it contains the Height Profile data
     :param _dim: orientation of the reflection (deflection) plane; can be 'x' or 'y'
     :param _ang: grazing angle (between input optical axis and mirror/grating plane)
     :param _ang_r: reflection angle (between output optical axis and mirror/grating plane)
+    :param _refl: reflectivity of the surface
     :param _amp_coef: height profile "amplification coefficient"
     :param _ar_arg_long: optional array of longitudinal position (along mirror/grating) in [m]; if _ar_arg_long is not None, any longitudinal position contained in _height_prof_data is ignored
     :param _nx: optional number of points in horizontal dimension of the output transmission optical element
@@ -5629,6 +5631,7 @@ def srwl_opt_setup_surf_height_1d(_height_prof_data, _dim, _ang, _ang_r=0, _amp_
         "orientation": _dim,
         "grazingAngle": _ang,
         "reflectionAngle": _ang_r,
+        "reflectivity": _refl, #NW06062025
         "heightAmplification": _amp_coef,
         "longitudinalPosition": _ar_arg_long,
         "horizontalPoints": _nx,
@@ -5723,7 +5726,8 @@ def srwl_opt_setup_surf_height_1d(_height_prof_data, _dim, _ang, _ang_r=0, _amp_
         arg2 = arg2Start #to make sure that only the mesh moves
         for i2 in range(n2):
             ofst = per2*i2 + per1_i1
-            optSlopeErr.arTr[ofst] = 1. #Amplitude Transmission #consider taking into account reflectivity
+            optSlopeErr.arTr[ofst] = _refl #NW06062025 thickness?? # accessed by GenTransNumData.pData
+             #Amplitude Transmission #consider taking into account reflectivity
             optSlopeErr.arTr[ofst + 1] = 0. #Optical Path Difference
             if(hApprox != 0):
                 optSlopeErr.arTr[ofst + 1] = -(sinAng + sinAngR)*hApprox*_amp_coef #Optical Path Difference (to check sign!)
