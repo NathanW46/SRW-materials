@@ -42,10 +42,15 @@ def get_refl_arr(
     _thickness=None,
 ):
     #TODO add docstring
-    
+    '''
+    returns a C-aligned flat array complex array vs photon energy vs grazing angle vs component (sigma, pi) for the specified material(s)
+    Example for 2 Photon Energy, 2 Angle, and 2 components:
+         [(E_0, A_0, S), (E_1, A_0, S), (E_0, A_1, S), (E_1, A_1, S), (E_0, A_0, P), (E_1, A_0, P), (E_0, A_1, P), (E_1, A_1, P)]
+    '''
+
     # Perfect reflectivity if xraydb is not installed
     if not xraydb_found:
-        return
+        return 1
     
 
     nTot = int(_n_ph_en * _n_ang * _n_comp * 2)
@@ -87,9 +92,8 @@ def calc_refl(formula, ang, energy, density=None, n_comp=1, polarization='s'):
        ang (float or nd-array):     mirror angle in radians
        energy (float or nd-array):  X-ray energy in eV
        density (float or None):     material density in g/cm^3
-       n_comp (1 or 2):             number of polarization components
-       polarization ('s' or 'p'):   polarization of x-ray beam
-
+       n_comp (1 or 2):             number of polarization components (1 = s, 2 = s and p)
+       polarization ('s' or 'p'):   mirror orientation relative to X-ray polarization (only works for single value reflectivity)
     Returns:
        real and imaginary mirror reflectivity values
     """
@@ -104,47 +108,36 @@ def calc_refl(formula, ang, energy, density=None, n_comp=1, polarization='s'):
     delta, beta, _ = xray_delta_beta(formula, density, energy)
     n = 1 - delta - 1j*beta
 
-
-
     if isinstance(energy, (np.ndarray, list, array)) and isinstance(ang, (np.ndarray, list, array)):
-        _energy, _ang = np.meshgrid(energy, ang, indexing='ij')
+        _ang, _energy = np.meshgrid(ang, energy, indexing='ij')
         _energy = _energy.ravel()
         _ang = _ang.ravel()
-        n = np.repeat(n, len(ang))
-        
+        n = np.tile(n, len(ang))
+
         # kiz is k in air/vacuum,  with n = 1.
         # ktz is k in mirror material, with n < 1.
         qf  = (2*np.pi/PLANCK_HC) * _energy
         kiz = qf * np.sin(_ang)
         ktz = qf * np.sqrt(n**2 - np.cos(_ang)**2)
 
-        if polarization == 'p' or n_comp == 2:
-            # calc p polarization
-            ktz_p = ktz / n
-            r_amp_p = (kiz - ktz_p)/(kiz + ktz_p)
+        r = (kiz - ktz)/(kiz + ktz)
+        r_flat = r.view(np.float64).ravel()
 
-        r_amp = (kiz - ktz)/(kiz + ktz)
-        r_amp_flat = np.empty(r_amp.size*n_comp*2, dtype=np.float64)
-
-        if n_comp == 1:
-            r_amp_flat[0::2] = r_amp.real
-            r_amp_flat[1::2] = r_amp.imag
-
-        elif n_comp == 2:
+        if n_comp == 2:
             # p polarization
             ktz_p = ktz / n
-            r_amp_p = (kiz - ktz_p)/(kiz + ktz_p)
+            r_p = (kiz - ktz_p)/(kiz + ktz_p)
             
-            r_amp_flat[0::4] = r_amp.real
-            r_amp_flat[1::4] = r_amp.imag
-            r_amp_flat[2::4] = r_amp_p.real
-            r_amp_flat[3::4] = r_amp_p.imag
-        else:
+            r_flat_p = r_p.view(np.float64).ravel()
+            r_flat = np.concatenate((r_flat, r_flat_p))
+        elif n_comp != 1:
             raise Exception(f"n_comp must be 1 or 2, not {n_comp}.")
 
-        return array('d', r_amp_flat)
+        print(f"len(r) = {r.shape}, n_comp = {n_comp}, n_ang = {len(ang)}, n_en = {len(energy)}")
+        return array('d', r_flat)
 
     else:
+        # if single values
 
         # kiz is k in air/vacuum,  with n = 1.
         # ktz is k in mirror material, with n < 1.
@@ -153,9 +146,13 @@ def calc_refl(formula, ang, energy, density=None, n_comp=1, polarization='s'):
         ktz = qf * np.sqrt(n**2 - np.cos(ang)**2)
         if polarization == 'p':
             ktz = ktz / n
-        r_amp = (kiz - ktz)/(kiz + ktz)
+        r = (kiz - ktz)/(kiz + ktz)
 
-        return r_amp.real, r_amp.imag
+        if isinstance(r, float):
+            print("single value reflection")
+            return (r*r.conjugate()).real
+        else: 
+            raise Exception(f"ang and energy must be nd-arrays, not {type(ang)} and {type(energy)}")
 
 
 def calc_multilayer_refl(mats, ang, ph_en, thicknesses, densities=None, n_comp=1):
@@ -165,30 +162,32 @@ def calc_multilayer_refl(mats, ang, ph_en, thicknesses, densities=None, n_comp=1
         mats (list): List of material names for each layer (top to bottom).
         ang: Incident angle in radians.
         ph_en: Photon energy in eV.
-        thicknesses (list): List of layer thicknesses in cm.
+        thicknesses (list): List of layer thicknesses in Angstroms
         densities (list, optional): List of layer densities in g/cm^3.
         n_comp (int, optional): Number of polarization components (1 or 2).
     Returns:
         c-aligned array: Reflectivity values for the multilayer surface.
     """
     if thicknesses is None:
-        raise Exception(f'Please provide thicknesses of each layer (exluding substrate)')
+        raise Exception(f'Please provide thicknesses in Angstroms of each layer (exluding substrate)')
     if len(mats) != len(thicknesses)+1:
         raise Exception(f'number of materials ({len(mats)}) should match number of thicknesses excluding substrate ({len(thicknesses)})')
     if densities is not None and len(mats) != len(densities):
         raise Exception(f"If not None, number of densities ({len(densities)}) should match number of materials({len(mats)})")
-    if isinstance(ph_en, (list, np.ndarray, array)) or isinstance(ang, (list, np.ndarray, array)):
-        raise Exception("Error: multiple energies or angles not supported yet")
+    # if isinstance(ph_en, (list, np.ndarray, array)) or isinstance(ang, (list, np.ndarray, array)):
+    #     raise Exception("Error: multiple energies or angles not supported yet")
 
     if densities is None:
         densities = [None]*len(mats)   
+    refl = []
 
     k0 = 2 * np.pi * ph_en / PLANCK_HC
     n_layers = len(mats) 
     thicknesses.append(None) # substrate Layer
+
     kz = [k0*np.sin(ang)]  # air/vacuum layer (n = 1)
     kx = k0*np.cos(ang)
-    d = [0]
+    d = [10]
 
 
     for i in range(n_layers):
@@ -209,11 +208,12 @@ def calc_multilayer_refl(mats, ang, ph_en, thicknesses, densities=None, n_comp=1
         d.append(thicknesses[i])
 
 
+
     print("Layers in Order:")
     for i in range(len(kz)):
         print(f'Layer {i}, kz: {kz[i]}, d: {d[i]}')
     print('\n\n')
-    r = (kz[-1] - kz[-2])/(kz[-1] + kz[-2])
+    r = (kz[-2] - kz[-1])/(kz[-2] + kz[-1])
     print(f'refl of substrate = {(r*r.conjugate()).real}')
     # exclude substrate >----------vv
     for i in reversed(range(len(kz)-2)):
@@ -225,9 +225,15 @@ def calc_multilayer_refl(mats, ang, ph_en, thicknesses, densities=None, n_comp=1
         r = (fresnel_r + r*(p**2))/(1 + fresnel_r*r*(p**2))
         print(f"refl between Layer {('air' if i == 0 else i)} and {'substrate' if (i+2) == len(kz) else (i+1)} is {(r*r.conjugate()).real}")
 
-    refl = [(r*r.conjugate()).real]
-    print(f'final refl of {mats} mirror = {refl}')
-    return array('d', refl)
+
+    # refl = np.empty(r.size*n_comp*2, dtype=np.float64)
+    # if n_comp == 1:
+    #     refl[0::2] = r.real
+    #     refl[1::2] = r.imag
+
+    # print(f'final refl of {mats} mirror = {refl}')
+    # return array('d', refl)
+    return (r*r.conjugate()).real
 
 
 def add_mat(name: str, formula: str, density: float, categories: list[str] | None = None) -> None:
@@ -256,12 +262,7 @@ def add_mat(name: str, formula: str, density: float, categories: list[str] | Non
     else:
         add_material(name, formula, density, categories)
     return
-
     
-
-
-
-
 
 def plot_refl_curves(mat, **kwargs):
     '''
@@ -360,6 +361,71 @@ def plot_refl_curves(mat, **kwargs):
     timer.start()
 
 
+def plot_refl2d(
+    refl: np.ndarray,
+    _ang_start: float, _ang_fin: float, _n_ang: int,
+    _ph_en_start: float, _ph_en_fin: float, _n_ph_en: int,
+    n_comp: int = 1,
+    constant: float = 10000,
+    material: str = ""
+):
+    """
+    Plot 2D reflectivity curves
+
+    Parameters
+    ----------
+    refl : np.ndarray
+        Complex C-aligned array of reflectivity values (photon energy vs grazing angle vs polarization)
+    _ang_start : float
+        Initial grazing angle in rad
+    _ang_fin : float
+        Final grazing angle in rad (exlusive)
+    _n_ang : int
+        Number of grazing angles
+   _ph_en_start : float
+        Initial photon energy in eV
+    _ph_en_fin : float
+        Final photon energy in eV (exlusive)
+    _n_ph_en : int
+        Number of photon energies
+    n_comp : int, optional
+        Number of polarization components. Defaults to 1.
+    p_index : int, optional
+        Index of the polarization component to plot (0 = s, 1 = p). Defaults to 0
+    constant : float
+        Constant value to plot against (either energy (eV) or angle (rad))
+    """
+    raise Exception("Not implemented yet")
+    nTot = int(_n_ph_en * _n_ang * n_comp * 2)
+    y = 0
+    plt.figure(figsize=(8, 6))
+
+    if constant > np.pi/2:
+        x = np.linspace(_ang_start, _ang_fin, _n_ang)
+        eStep = (_ph_en_fin - _ph_en_start)/(_n_ph_en) if _n_ph_en > 1 else 1
+        e_i = round((constant - _ph_en_start)/eStep + 0.00001)
+        id_start = 0 # (((e_i) * n_comp + p_index) * 2)
+        id_fin =  _n_ang * 2 #(((e_i + _n_ph_en * x[-1]) * n_comp + p_index) * 2)
+        print(id_start, id_fin)
+        y = [((refl[i] + 1j*refl[i+1])*(refl[i] - 1j*refl[i+1])).real for i in range(id_start, id_fin, n_comp*2)]
+
+        title = f"{material + ' ' if material != '' else ''}Reflectivity vs. Grazing Angle at {constant:.2f} eV"
+        plt.xlabel("Ang (mrad)")
+
+        plt.plot(x*1000, y)
+
+    else:
+        raise Exception("Not implemented")
+        energy = np.linspace(_ph_en_start, _ph_en_fin, _n_ph_en)
+
+    plt.ylabel("Reflectivity")
+    plt.title(title)
+    plt.tight_layout()
+
+    
+
+    
+
 
 
 def plot_refl3d(
@@ -378,7 +444,7 @@ def plot_refl3d(
     - _ang_start, _ang_fin, _n_ang: angle range and resolution
     - _ph_en_start, _ph_en_fin, _n_ph_en: energy range and resolution
     - n_comp: number of polarization components (default 1 = s)
-    - p_index: polarization index to plot (0 or 1)
+    - p_index: polarization index to plot (0 = s, 1 = p)
     - title: plot title
     """
     if not isinstance(refl, (np.ndarray, list, array)):
